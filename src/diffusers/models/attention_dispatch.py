@@ -79,9 +79,13 @@ else:
 if _CAN_USE_FLASH_ATTN_3:
     from flash_attn_interface import flash_attn_func as flash_attn_3_func
     from flash_attn_interface import flash_attn_varlen_func as flash_attn_3_varlen_func
+
+    _flash_attn_3_sig = inspect.signature(flash_attn_3_func)
+    _FLASH_ATTN_3_SUPPORTS_RETURN_PROBS = "return_attn_probs" in _flash_attn_3_sig.parameters
 else:
     flash_attn_3_func = None
     flash_attn_3_varlen_func = None
+    _FLASH_ATTN_3_SUPPORTS_RETURN_PROBS = False
 
 if _CAN_USE_AITER_ATTN:
     from aiter import flash_attn_func as aiter_flash_attn_func
@@ -621,24 +625,38 @@ def _wrapped_flash_attn_3(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     # Hardcoded for now because pytorch does not support tuple/int type hints
     window_size = (-1, -1)
-    out, lse, *_ = flash_attn_3_func(
-        q=q,
-        k=k,
-        v=v,
-        softmax_scale=softmax_scale,
-        causal=causal,
-        qv=qv,
-        q_descale=q_descale,
-        k_descale=k_descale,
-        v_descale=v_descale,
-        window_size=window_size,
-        attention_chunk=attention_chunk,
-        softcap=softcap,
-        num_splits=num_splits,
-        pack_gqa=pack_gqa,
-        deterministic=deterministic,
-        sm_margin=sm_margin,
-    )
+    kwargs = {
+        "q": q,
+        "k": k,
+        "v": v,
+        "softmax_scale": softmax_scale,
+        "causal": causal,
+        "qv": qv,
+        "q_descale": q_descale,
+        "k_descale": k_descale,
+        "v_descale": v_descale,
+        "window_size": window_size,
+        "attention_chunk": attention_chunk,
+        "softcap": softcap,
+        "num_splits": num_splits,
+        "pack_gqa": pack_gqa,
+        "deterministic": deterministic,
+        "sm_margin": sm_margin,
+    }
+
+    if _FLASH_ATTN_3_SUPPORTS_RETURN_PROBS:
+        kwargs["return_attn_probs"] = True
+        result = flash_attn_3_func(**kwargs)
+        out, lse, *_ = result
+    else:
+        result = flash_attn_3_func(**kwargs)
+        if isinstance(result, tuple):
+            out, lse, *_ = result
+        else:
+            out = result
+            batch_size, num_heads, seq_len, _ = q.shape
+            lse = torch.zeros(batch_size, seq_len, num_heads, dtype=torch.float32, device=q.device)
+
     lse = lse.permute(0, 2, 1)
     return out, lse
 
