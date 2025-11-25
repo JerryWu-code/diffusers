@@ -18,7 +18,6 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
 from torch.nn.utils.rnn import pad_sequence
 
 from ...configuration_utils import ConfigMixin, register_to_config
@@ -429,9 +428,12 @@ class ZImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOr
         for i in range(bsz):
             F, H, W = size[i]
             ori_len = (F // pF) * (H // pH) * (W // pW)
-            x[i] = rearrange(
-                x[i][:ori_len].view(F // pF, H // pH, W // pW, pF, pH, pW, self.out_channels),
-                "f h w pf ph pw c -> c (f pf) (h ph) (w pw)",
+            # "f h w pf ph pw c -> c (f pf) (h ph) (w pw)"
+            x[i] = (
+                x[i][:ori_len]
+                .view(F // pF, H // pH, W // pW, pF, pH, pW, self.out_channels)
+                .permute(6, 0, 3, 1, 4, 2, 5)
+                .reshape(self.out_channels, F, H, W)
             )
         return x
 
@@ -497,7 +499,8 @@ class ZImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOr
             F_tokens, H_tokens, W_tokens = F // pF, H // pH, W // pW
 
             image = image.view(C, F_tokens, pF, H_tokens, pH, W_tokens, pW)
-            image = rearrange(image, "c f pf h ph w pw -> (f h w) (pf ph pw c)")
+            # "c f pf h ph w pw -> (f h w) (pf ph pw c)"
+            image = image.permute(1, 3, 5, 2, 4, 6, 0).reshape(F_tokens * H_tokens * W_tokens, pF * pH * pW * C)
 
             image_ori_len = len(image)
             image_padding_len = (-image_ori_len) % SEQ_MULTI_OF
@@ -638,7 +641,9 @@ class ZImageTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOr
 
         if torch.is_grad_enabled() and self.gradient_checkpointing:
             for layer in self.layers:
-                unified = self._gradient_checkpointing_func(layer, unified, unified_attn_mask, unified_freqs_cis, adaln_input)
+                unified = self._gradient_checkpointing_func(
+                    layer, unified, unified_attn_mask, unified_freqs_cis, adaln_input
+                )
         else:
             for layer in self.layers:
                 unified = layer(unified, unified_attn_mask, unified_freqs_cis, adaln_input)
