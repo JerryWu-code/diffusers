@@ -621,24 +621,32 @@ def _wrapped_flash_attn_3(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     # Hardcoded for now because pytorch does not support tuple/int type hints
     window_size = (-1, -1)
-    out, lse, *_ = flash_attn_3_func(
-        q=q,
-        k=k,
-        v=v,
-        softmax_scale=softmax_scale,
-        causal=causal,
-        qv=qv,
-        q_descale=q_descale,
-        k_descale=k_descale,
-        v_descale=v_descale,
-        window_size=window_size,
-        attention_chunk=attention_chunk,
-        softcap=softcap,
-        num_splits=num_splits,
-        pack_gqa=pack_gqa,
-        deterministic=deterministic,
-        sm_margin=sm_margin,
-    )
+
+    kwargs = {
+        "q": q,
+        "k": k,
+        "v": v,
+        "softmax_scale": softmax_scale,
+        "causal": causal,
+        "qv": qv,
+        "q_descale": q_descale,
+        "k_descale": k_descale,
+        "v_descale": v_descale,
+        "window_size": window_size,
+        "attention_chunk": attention_chunk,
+        "softcap": softcap,
+        "num_splits": num_splits,
+        "pack_gqa": pack_gqa,
+        "deterministic": deterministic,
+        "sm_margin": sm_margin,
+    }
+
+    # For backward compatibility with early flash-attn-3 APIs.
+    if "return_attn_probs" in inspect.signature(flash_attn_3_func).parameters:
+        kwargs["return_attn_probs"] = True
+
+    out, lse, *_ = flash_attn_3_func(**kwargs)
+
     lse = lse.permute(0, 2, 1)
     return out, lse
 
@@ -1504,17 +1512,29 @@ def _flash_varlen_attention_3(
     key_packed = torch.cat(key_valid, dim=0)
     value_packed = torch.cat(value_valid, dim=0)
 
-    out, lse, *_ = flash_attn_3_varlen_func(
-        q=query_packed,
-        k=key_packed,
-        v=value_packed,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k=cu_seqlens_k,
-        max_seqlen_q=max_seqlen_q,
-        max_seqlen_k=max_seqlen_k,
-        softmax_scale=scale,
-        causal=is_causal,
-    )
+    kwargs = {
+        "q": query_packed,
+        "k": key_packed,
+        "v": value_packed,
+        "cu_seqlens_q": cu_seqlens_q,
+        "cu_seqlens_k": cu_seqlens_k,
+        "max_seqlen_q": max_seqlen_q,
+        "max_seqlen_k": max_seqlen_k,
+        "softmax_scale": scale,
+        "causal": is_causal,
+    }
+
+    if "return_attn_probs" in inspect.signature(flash_attn_3_varlen_func).parameters:
+        kwargs["return_attn_probs"] = return_lse
+        out = flash_attn_3_varlen_func(**kwargs)
+        if return_lse:
+            out, lse = out[0], out[1]
+        else:
+            lse = None
+    else:
+        # For backward compatibility with early flash-attn-3 APIs.
+        out, lse, *_ = flash_attn_3_varlen_func(**kwargs)
+
     out = out.unflatten(0, (batch_size, -1))
 
     return (out, lse) if return_lse else out
