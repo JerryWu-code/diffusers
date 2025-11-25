@@ -1562,17 +1562,29 @@ def _flash_varlen_attention_3(
     key_packed = torch.cat(key_valid, dim=0)
     value_packed = torch.cat(value_valid, dim=0)
 
-    out, lse, *_ = flash_attn_3_varlen_func(
-        q=query_packed,
-        k=key_packed,
-        v=value_packed,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k=cu_seqlens_k,
-        max_seqlen_q=max_seqlen_q,
-        max_seqlen_k=max_seqlen_k,
-        softmax_scale=scale,
-        causal=is_causal,
-    )
+    kwargs = {
+        "q": query_packed,
+        "k": key_packed,
+        "v": value_packed,
+        "cu_seqlens_q": cu_seqlens_q,
+        "cu_seqlens_k": cu_seqlens_k,
+        "max_seqlen_q": max_seqlen_q,
+        "max_seqlen_k": max_seqlen_k,
+        "softmax_scale": scale,
+        "causal": is_causal,
+    }
+
+    if "return_attn_probs" in inspect.signature(flash_attn_3_varlen_func).parameters:
+        kwargs["return_attn_probs"] = return_lse
+        out = flash_attn_3_varlen_func(**kwargs)
+        if return_lse:
+            out, lse = out[0], out[1]
+        else:
+            lse = None
+    else:
+        # For backward compatibility with early flash-attn-3 APIs.
+        out, lse, *_ = flash_attn_3_varlen_func(**kwargs)
+
     out = out.unflatten(0, (batch_size, -1))
 
     return (out, lse) if return_lse else out
